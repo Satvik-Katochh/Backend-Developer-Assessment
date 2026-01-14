@@ -1,0 +1,21 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+task_harmony/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output files (optional - you may want to commit output.json)
+# output.json

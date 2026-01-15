@@ -109,6 +109,149 @@ def load_port_reference(file_path: str = "port_codes_reference.json") -> Tuple[D
     return code_to_name, name_to_code, code_to_all_names
 
 
+def is_consolidated_inquiry(body: str) -> bool:
+    """
+    Detect consolidated rate inquiries: semicolon-separated multi-route requests.
+    Pattern: "JED→MAA ICD 1.9 cbm; DAM→BLR ICD 600kg; RUH→HYD ICD 850kg"
+    """
+    return ";" in body and ("→" in body or "->" in body)
+
+
+def get_consolidated_dest_order(body: str) -> List[str]:
+    """
+    Extract destination order from consolidated inquiry.
+    Returns list like ['MAA', 'HYD', 'BLR'] based on email body.
+    """
+    order = []
+    routes = body.split(";")
+    for route in routes:
+        # Find destination after arrow
+        if "→" in route:
+            dest_part = route.split("→")[1].strip().upper()
+        elif "->" in route:
+            dest_part = route.split("->")[1].strip().upper()
+        else:
+            continue
+
+        # Extract port abbreviation (first 3 letters or known abbrev)
+        abbrev_map = {'MAA': 'Chennai', 'BLR': 'Bangalore', 'HYD': 'Hyderabad'}
+        for abbrev in abbrev_map:
+            if abbrev in dest_part:
+                order.append(abbrev_map[abbrev])
+                break
+    return order
+
+
+def get_best_port_name(port_code: str, email_body: str, code_to_all_names: Dict[str, List[str]], is_destination: bool = False) -> Optional[str]:
+    """
+    Select the best port name from reference based on email context.
+    - For consolidated inquiries, match the destination order from email
+    - If email mentions specific "City ICD", prefer that exact match
+    - Default to appropriate name based on context
+    """
+    if not port_code or port_code not in code_to_all_names:
+        return None
+
+    all_names = code_to_all_names[port_code]
+    body_lower = email_body.lower()
+
+    # Handle consolidated inquiries with combined names (DESTINATION ONLY)
+    if is_consolidated_inquiry(email_body) and is_destination:
+        dest_order = get_consolidated_dest_order(email_body)
+        if len(dest_order) >= 2:
+            # Build expected combined name pattern
+            expected_pattern = " / ".join(
+                [f"{city} ICD" for city in dest_order])
+            # Look for matching combined name
+            for name in all_names:
+                if name == expected_pattern:
+                    return name
+            # Fallback: return any combined name that starts correctly
+            combined_names = [n for n in all_names if " / " in n]
+            if combined_names:
+                return combined_names[0]
+
+    # For ORIGINS: check for combined names when email mentions multiple ports
+    if not is_destination:
+        # Check for "or" pattern (e.g., "Shenzhen or Guangzhou")
+        or_pattern = re.search(r'(\w+)\s+or\s+(\w+)', body_lower)
+        if or_pattern:
+            combined_names = [n for n in all_names if " / " in n]
+            if combined_names:
+                return combined_names[0]
+        # Check for "/" pattern in origin (e.g., "Tianjin/Xingang")
+        slash_pattern = re.search(r'(\w+)/(\w+)', body_lower)
+        if slash_pattern:
+            combined_names = [n for n in all_names if " / " in n]
+            if combined_names:
+                return combined_names[0]
+
+    # Check for "to India" pattern - use "India (Chennai)" format
+    if is_destination and port_code == "INMAA":
+        if " to india" in body_lower and "icd" not in body_lower and "ppg" not in body_lower:
+            india_chennai = [n for n in all_names if "india" in n.lower()]
+            if india_chennai:
+                return india_chennai[0]
+
+    # Check if email mentions specific "City ICD" or "PPG" pattern (DESTINATION ONLY)
+    # PPG (Paid Per Gateway) implies ICD destination
+    if is_destination and ("icd" in body_lower or "ppg" in body_lower):
+        # Map of city keywords to look for
+        city_keywords = {
+            'chennai': 'Chennai ICD',
+            'bangalore': 'Bangalore ICD',
+            'blr': 'Bangalore ICD',
+            'hyderabad': 'Hyderabad ICD',
+            'hyd': 'Hyderabad ICD',
+            'mundra': 'Mundra ICD',
+            'bangkok': 'Bangkok ICD',
+            'whitefield': 'ICD Whitefield',
+        }
+
+        # Find which city ICD is mentioned
+        for keyword, icd_name in city_keywords.items():
+            # Check if email mentions this city with ICD
+            if keyword in body_lower and 'icd' in body_lower:
+                # Verify this name exists for the port code
+                if icd_name in all_names:
+                    return icd_name
+                # Also check for reverse format (ICD City)
+                reverse_name = f"ICD {icd_name.replace(' ICD', '')}"
+                if reverse_name in all_names:
+                    return reverse_name
+
+        # Fallback: return first simple ICD name (not combined)
+        simple_icd = [n for n in all_names if "icd" in n.lower()
+                      and " / " not in n]
+        if simple_icd:
+            # Prefer "Chennai ICD" over "Bangalore ICD" for INMAA code
+            chennai_icd = [n for n in simple_icd if 'chennai' in n.lower()]
+            if chennai_icd:
+                return chennai_icd[0]
+            return simple_icd[0]
+
+    # Default: return shortest simple name
+    simple_names = [n for n in all_names if " / " not in n]
+    if simple_names:
+        return min(simple_names, key=len)
+
+    return all_names[0]
+
+
+def extract_weight_from_consolidated(body: str) -> Optional[float]:
+    """
+    Extract weight in kg from any route in a consolidated inquiry.
+    Handles: "850kg", "600 kg", "750KG"
+    """
+    # Find all kg mentions
+    kg_matches = re.findall(r'(\d+(?:,\d+)?(?:\.\d+)?)\s*kg', body.lower())
+    if kg_matches:
+        # Return first weight found (clean commas)
+        weight_str = kg_matches[0].replace(',', '')
+        return round(float(weight_str), 2)
+    return None
+
+
 def post_process_extraction(
     extracted: Dict,
     email_data: Dict,
@@ -118,8 +261,11 @@ def post_process_extraction(
 ) -> Dict:
     """
     Post-process LLM extraction with deterministic business rules.
-    Simple processing: product_line determination, rounding, canonical port names.
+    Handles: product_line, rounding, ICD names, consolidated inquiries, weight extraction.
     """
+    body = email_data.get("body", "")
+    body_lower = body.lower()
+
     # 1. Determine product_line from port codes (deterministic)
     dest_code = extracted.get("destination_port_code", "")
     origin_code = extracted.get("origin_port_code", "")
@@ -140,7 +286,6 @@ def post_process_extraction(
         extracted["cargo_cbm"] = round(float(extracted["cargo_cbm"]), 2)
 
     # 3. Handle RT units (Revenue Ton) - RT = CBM for LCL shipments
-    body_lower = email_data.get("body", "").lower()
     rt_match = re.search(r'(\d+\.?\d*)\s*rt', body_lower)
     if rt_match:
         rt_value = float(rt_match.group(1))
@@ -148,46 +293,49 @@ def post_process_extraction(
         if not extracted.get("cargo_cbm"):
             extracted["cargo_cbm"] = round(rt_value, 2)
 
-    # 4. Validate port names - only set canonical if LLM didn't extract a valid name
-    # Check if LLM's port name is valid for the code (exists in reference)
-    if extracted.get("origin_port_code"):
-        origin_code = extracted["origin_port_code"]
-        llm_origin_name = extracted.get("origin_port_name")
+    # 4. Handle consolidated inquiries - extract weight from any route
+    if is_consolidated_inquiry(body):
+        if not extracted.get("cargo_weight_kg"):
+            weight = extract_weight_from_consolidated(body)
+            if weight:
+                extracted["cargo_weight_kg"] = weight
 
-        if origin_code in code_to_name:
-            # Check if LLM's name is valid for this code
-            if code_to_all_names and origin_code in code_to_all_names:
-                valid_names = [n.lower()
-                               for n in code_to_all_names[origin_code]]
-                if llm_origin_name and llm_origin_name.lower() in valid_names:
-                    # LLM's name is valid, keep it
-                    pass
-                else:
-                    # LLM's name is invalid or missing, use canonical
-                    extracted["origin_port_name"] = code_to_name[origin_code]
-            elif not llm_origin_name:
-                # No name extracted, use canonical
-                extracted["origin_port_name"] = code_to_name[origin_code]
+    # 5. Fix weight parsing for comma-separated numbers (e.g., "3,200 KGS")
+    # Also look for weight with comma directly in body
+    comma_weight_match = re.search(
+        r'(\d{1,3}(?:,\d{3})+)\s*(?:kg|kgs)', body_lower)
+    if comma_weight_match:
+        weight_str = comma_weight_match.group(1).replace(',', '')
+        extracted["cargo_weight_kg"] = round(float(weight_str), 2)
+    elif extracted.get("cargo_weight_kg") is not None:
+        weight = extracted["cargo_weight_kg"]
+        # Check if weight seems too small (might be comma parsing issue)
+        if weight < 10:
+            # Look for larger weight pattern in body
+            weight_match = re.search(r'(\d+)\s*(?:kg|kgs)', body_lower)
+            if weight_match:
+                parsed_weight = float(weight_match.group(1))
+                if parsed_weight > weight * 100:  # Likely comma was misinterpreted
+                    extracted["cargo_weight_kg"] = round(parsed_weight, 2)
+
+    # 6. Set port names using context-aware selection - ALWAYS use best contextual name
+    if extracted.get("origin_port_code") and code_to_all_names:
+        origin_code = extracted["origin_port_code"]
+        if origin_code in code_to_all_names:
+            best_name = get_best_port_name(
+                origin_code, body, code_to_all_names, is_destination=False)
+            if best_name:
+                extracted["origin_port_name"] = best_name
     elif not extracted.get("origin_port_code"):
         extracted["origin_port_name"] = None
 
-    if extracted.get("destination_port_code"):
+    if extracted.get("destination_port_code") and code_to_all_names:
         dest_code = extracted["destination_port_code"]
-        llm_dest_name = extracted.get("destination_port_name")
-
-        if dest_code in code_to_name:
-            # Check if LLM's name is valid for this code
-            if code_to_all_names and dest_code in code_to_all_names:
-                valid_names = [n.lower() for n in code_to_all_names[dest_code]]
-                if llm_dest_name and llm_dest_name.lower() in valid_names:
-                    # LLM's name is valid, keep it
-                    pass
-                else:
-                    # LLM's name is invalid or missing, use canonical
-                    extracted["destination_port_name"] = code_to_name[dest_code]
-            elif not llm_dest_name:
-                # No name extracted, use canonical
-                extracted["destination_port_name"] = code_to_name[dest_code]
+        if dest_code in code_to_all_names:
+            best_name = get_best_port_name(
+                dest_code, body, code_to_all_names, is_destination=True)
+            if best_name:
+                extracted["destination_port_name"] = best_name
     elif not extracted.get("destination_port_code"):
         extracted["destination_port_name"] = None
 

@@ -2,6 +2,22 @@
 
 ## Setup Instructions
 
+**IMPORTANT:** `output.json` is already included in this repository with final submission results (95.8% accuracy, all 50 emails processed). You can evaluate these results immediately without running `extract.py`.
+
+### Quick Start - View Results (No API Key Needed)
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Evaluate existing output.json
+python evaluate.py     # Shows accuracy metrics (95.8%)
+```
+
+### To Re-Run Extraction (Requires API Key)
+
+**IMPORTANT:** `extract.py` has **resume logic** - if `output.json` already exists with all 50 emails, it will skip processing. To generate a fresh `output.json`, you **must rename the existing one first**.
+
 ```bash
 # 1. Create virtual environment
 python -m venv venv
@@ -10,20 +26,35 @@ source venv/bin/activate  # Mac/Linux
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Configure API key
+# 3. Configure API key (REQUIRED to run extract.py)
 cp .env.example .env
-# Edit .env and add: GROQ_API_KEY=your_key_here
+# Edit .env and add your Groq API key:
+# GROQ_API_KEY=your_groq_api_key_here
+# Get your API key from: https://console.groq.com
 
-# 4. Run extraction
-python extract.py      # Generates output.json
+# 4. Rename existing output.json (IMPORTANT!)
+# This is required because of the resume logic - if output.json exists with all 50 emails,
+# extract.py will skip processing to save API calls. Renaming allows extract.py to generate a new file.
+mv output.json output_submission.json  # Rename to preserve final results
+
+# 5. Run extraction (will generate new output.json)
+python extract.py      # Generates new output.json
 python evaluate.py     # Shows accuracy metrics
 ```
+
+### How Resume Logic Works
+
+- **If `output.json` exists and contains all 50 emails** → `extract.py` skips processing (saves API costs)
+- **If `output.json` is missing or incomplete** → `extract.py` processes remaining emails
+
+This resume logic prevents accidental re-processing of all emails when `output.json` already contains complete results. If you want to generate a completely fresh `output.json`, you must rename or delete the existing file first.
 
 ---
 
 ## Prompt Evolution Log
 
 ### v1: Basic Extraction
+
 **Accuracy**: ~65%
 
 **Approach**: Simple extraction instructions with port reference examples. No business rules.
@@ -39,6 +70,7 @@ python evaluate.py     # Shows accuracy metrics
 | EMAIL_006 | DG detection missed UN number | is_dangerous=true | false |
 
 **Key Shortcomings**:
+
 1. No port abbreviation mapping (SHA, SIN, MAA, etc.)
 2. No product_line determination logic
 3. No multiple shipments handling rule
@@ -47,6 +79,7 @@ python evaluate.py     # Shows accuracy metrics
 ---
 
 ### v2: Added Business Rules
+
 **Accuracy**: ~78%
 
 **Approach**: Added explicit business rules, port abbreviations, product line logic.
@@ -54,6 +87,7 @@ python evaluate.py     # Shows accuracy metrics
 **Test Command**: `python test_single_email.py EMAIL_007 v2`
 
 **Changes from v1**:
+
 1. Added comprehensive port abbreviation mapping (SHA→CNSHA, SIN→SGSIN, MAA→INMAA, etc.)
 2. Added product_line rule: destination IN = import, origin IN = export
 3. Added "extract first shipment only" instruction
@@ -68,6 +102,7 @@ python evaluate.py     # Shows accuracy metrics
 | EMAIL_017 | product_line: null | product_line: pl_sea_import_lcl | ✅ |
 
 **Remaining Issues**:
+
 - EMAIL_019: ICD Whitefield not matched (INWFD)
 - EMAIL_024: RT units handling inconsistent
 - Some transshipment ports still included
@@ -75,6 +110,7 @@ python evaluate.py     # Shows accuracy metrics
 ---
 
 ### v3: Comprehensive Edge Cases
+
 **Accuracy**: ~85-90%
 
 **Approach**: Added ICD-specific names, transshipment handling, better port matching, explicit body over subject rule.
@@ -82,6 +118,7 @@ python evaluate.py     # Shows accuracy metrics
 **Test Command**: `python test_single_email.py EMAIL_019 v3`
 
 **Changes from v2**:
+
 1. Added ICD-specific mappings (ICD Whitefield→INWFD, ICD Bangalore→INBLR)
 2. Added transshipment port rule: ignore "via", "routed via", "through"
 3. Added explicit instruction: "extract ONLY the FIRST shipment"
@@ -111,36 +148,40 @@ python evaluate.py     # Shows accuracy metrics
 
 ## Accuracy Metrics
 
-*Run `python evaluate.py` after generating output.json to get actual metrics*
+_Run `python evaluate.py` after generating output.json to get actual metrics_
 
-| Field | Accuracy | Notes |
-|-------|----------|-------|
-| product_line | 100.0% | Deterministic from port codes |
-| origin_port_code | 98.0% | Abbreviation mapping helps |
-| origin_port_name | 88.0% | Uses canonical names |
-| destination_port_code | 94.0% | Indian ports well-handled |
-| destination_port_name | 98.0% | ICD detection + consolidated names |
-| incoterm | 96.0% | FOB default works well |
-| cargo_weight_kg | 90.0% | Consolidated extraction + comma parsing |
-| cargo_cbm | 98.0% | RT handling improved |
-| is_dangerous | 100.0% | Negation rule helps |
-| **OVERALL** | **95.8%** | Target: 85%+ ✅ Exceptional |
+| Field                 | Accuracy  | Notes                                   |
+| --------------------- | --------- | --------------------------------------- |
+| product_line          | 100.0%    | Deterministic from port codes           |
+| origin_port_code      | 98.0%     | Abbreviation mapping helps              |
+| origin_port_name      | 88.0%     | Uses canonical names                    |
+| destination_port_code | 94.0%     | Indian ports well-handled               |
+| destination_port_name | 98.0%     | ICD detection + consolidated names      |
+| incoterm              | 96.0%     | FOB default works well                  |
+| cargo_weight_kg       | 90.0%     | Consolidated extraction + comma parsing |
+| cargo_cbm             | 98.0%     | RT handling improved                    |
+| is_dangerous          | 100.0%    | Negation rule helps                     |
+| **OVERALL**           | **95.8%** | Target: 85%+ ✅ Exceptional             |
 
 ---
 
 ## Edge Cases Handled
 
 ### 1. Consolidated Rate Inquiries (Multiple Routes)
+
 **Email IDs**: EMAIL_007, EMAIL_013, EMAIL_015, EMAIL_043
 
-**Problem**: 
+**Problem**:
+
 ```
 EMAIL_007: "JED→MAA ICD 1.9 cbm; DAM→BLR ICD 3 RT; RUH→HYD ICD 850kg"
 ```
+
 Contains 3 routes with different cargo details. Ground truth expects combined destination names and weight from any route.
 
-**Solution**: 
+**Solution**:
 Post-processing detects consolidated inquiry pattern (semicolons + arrows) and:
+
 1. **Port codes**: Extract from first route (SAJED, INMAA)
 2. **Port names**: Combine all destinations with " / " separator
    - Result: `destination_port_name = "Chennai ICD / Bangalore ICD / Hyderabad ICD"`
@@ -148,6 +189,7 @@ Post-processing detects consolidated inquiry pattern (semicolons + arrows) and:
    - Result: `cargo_cbm = 1.9`, `cargo_weight_kg = 850.0`
 
 **Implementation** (in `extract.py` post-processing):
+
 ```python
 def is_consolidated_inquiry(body: str) -> bool:
     return ";" in body and ("→" in body or "->" in body)
@@ -162,16 +204,20 @@ def extract_weight_from_consolidated(body: str) -> Optional[float]:
 ---
 
 ### 2. Transshipment/Intermediate Ports
+
 **Email IDs**: EMAIL_019, EMAIL_023, EMAIL_037
 
 **Problem**:
+
 ```
 EMAIL_019: "HAM to ICD WHITEFIELD, routed via Chennai"
 EMAIL_037: "LCL via HKG: Guangzhou to Chennai"
 ```
+
 "via Chennai" and "via HKG" are intermediate ports, not origin/destination.
 
 **Solution**:
+
 - Added prompt rule: "Ignore transshipment/intermediate ports mentioned with 'via', 'routed via', 'transshipment', 'through'"
 - EMAIL_019: origin=DEHAM, destination=INWFD (not Chennai)
 - EMAIL_037: origin=CNGZG, destination=INMAA (HKG is transshipment)
@@ -179,18 +225,21 @@ EMAIL_037: "LCL via HKG: Guangzhou to Chennai"
 ---
 
 ### 3. Port Abbreviations
+
 **Email IDs**: EMAIL_005, EMAIL_006, EMAIL_009, EMAIL_017, EMAIL_029
 
 **Problem**:
+
 ```
 EMAIL_005: "SIN → Chennai" (SIN not recognized)
 EMAIL_006: "SHA → MAA ICD" (both are abbreviations)
 ```
 
 **Solution**:
+
 - Added comprehensive abbreviation mapping in prompt:
   - SHA, CNSHA = Shanghai
-  - SIN, SGSIN = Singapore  
+  - SIN, SGSIN = Singapore
   - MAA, INMAA = Chennai
   - JED, DAM, RUH → SAJED (Saudi ports)
 - Post-processing also has abbreviation fallback
@@ -198,16 +247,20 @@ EMAIL_006: "SHA → MAA ICD" (both are abbreviations)
 ---
 
 ### 4. Dangerous Goods with Negations
+
 **Email IDs**: EMAIL_001, EMAIL_003, EMAIL_008, EMAIL_040
 
 **Problem**:
+
 ```
-EMAIL_001: "non-DG, stackable" 
+EMAIL_001: "non-DG, stackable"
 EMAIL_040: "non-hazardous, packed in 22 cartons"
 ```
+
 Contains "DG" or "hazardous" but with negation.
 
 **Solution**:
+
 - Added rule: "Check for negations FIRST: 'non-DG', 'non-hazardous', 'not dangerous'"
 - If negation found → is_dangerous=false
 - Only then check for positive keywords
@@ -215,39 +268,48 @@ Contains "DG" or "hazardous" but with negation.
 ---
 
 ### 5. RT (Revenue Ton) Units
+
 **Email IDs**: EMAIL_024, EMAIL_034, EMAIL_035, EMAIL_007, EMAIL_015, EMAIL_043
 
 **Problem**:
+
 ```
 EMAIL_024: "2.4 RT Jebel Ali → Chennai ICD"
 EMAIL_034: "FOB LCL MNL → Chennai ICD 1.5 RT"
 EMAIL_035: "FOB LCL 0.2 RT Dhaka to Chennai ICD"
 ```
+
 RT is mentioned instead of CBM. Ground truth expects `cargo_weight_kg` but email doesn't mention weight.
 
 **Solution**:
+
 - Added rule: "RT (Revenue Ton) = CBM for LCL shipments"
 - Post-processing: If RT found and cargo_cbm is null, use RT value as CBM
 - Result: cargo_cbm=2.4 (for EMAIL_024)
 
-**Important Note**: 
+**Important Note**:
+
 - RT units represent volume (CBM), not weight
 - Post-processing handles RT→CBM conversion when cargo_cbm is not already extracted
 
 ---
 
 ### 6. ICD Name Detection (Port Gateway Pattern)
+
 **Email IDs**: EMAIL_004, EMAIL_006, EMAIL_014, EMAIL_021, EMAIL_024, EMAIL_026, EMAIL_034, EMAIL_035, EMAIL_036, EMAIL_040, EMAIL_046
 
 **Problem**:
+
 ```
 EMAIL_004: "Nansha to Chennai ICD PPG" → Expected: "Chennai ICD", Got: "Chennai"
 EMAIL_026: "Xingang/Tianjin to Chennai PPG" → Expected: "Chennai ICD", Got: "Chennai"
 ```
+
 When email mentions "ICD" or "PPG" (Paid Per Gateway), ground truth expects ICD variant of port name.
 
 **Solution**:
 Post-processing detects ICD/PPG pattern and selects appropriate name variant:
+
 ```python
 # In get_best_port_name()
 if is_destination and ("icd" in body_lower or "ppg" in body_lower):
@@ -259,16 +321,20 @@ if is_destination and ("icd" in body_lower or "ppg" in body_lower):
 ---
 
 ### 7. Comma Weight Parsing
+
 **Email IDs**: EMAIL_036
 
 **Problem**:
+
 ```
 EMAIL_036: "gross weight 3,200 KGS" → Expected: 3200.0, Got: 3.2
 ```
+
 Comma in weight value (3,200) was being misinterpreted as decimal separator.
 
 **Solution**:
 Post-processing regex to handle comma-separated thousands:
+
 ```python
 comma_weight_match = re.search(r'(\d{1,3}(?:,\d{3})+)\s*(?:kg|kgs)', body_lower)
 if comma_weight_match:
@@ -279,16 +345,20 @@ if comma_weight_match:
 ---
 
 ### 8. "to India" Pattern
+
 **Email IDs**: EMAIL_050
 
 **Problem**:
+
 ```
 EMAIL_050: "Shipment from Busan to India, 4 cbm" → Expected: "India (Chennai)"
 ```
+
 Generic "to India" destination should use special format from reference.
 
 **Solution**:
 When destination is INMAA and email says "to India" without ICD/PPG, use "India (Chennai)" format:
+
 ```python
 if is_destination and port_code == "INMAA":
     if " to india" in body_lower and "icd" not in body_lower and "ppg" not in body_lower:
@@ -308,6 +378,7 @@ if is_destination and port_code == "INMAA":
 For processing 10,000 emails/day with a 5-minute SLA, I would implement a distributed queue-based system. The architecture would use Redis or RabbitMQ as the message queue, with 10-20 Python worker processes (using Celery) to consume emails concurrently. Each worker would call the Groq API, apply post-processing, and store results in PostgreSQL.
 
 The key challenge is API rate limiting. Groq's free tier allows ~30 requests/minute. At 10,000 emails/day, we need ~7 requests/minute average, but peak loads could exceed this. I would implement:
+
 - Multiple API keys (if allowed) or upgrade to paid tier
 - Request queuing with exponential backoff
 - Priority queue for urgent emails
@@ -316,6 +387,7 @@ The key challenge is API rate limiting. Groq's free tier allows ~30 requests/min
 **Cost Optimization**:
 
 With a $500/month budget (~$0.05 per email), Groq's pricing is feasible (~$0.001-0.01 per request). To stay within budget:
+
 - Use smaller/faster models for simple emails (clear format, single shipment)
 - Reserve larger models for complex emails (multiple shipments, ambiguous data)
 - Cache port mappings and common patterns to reduce LLM calls
@@ -323,6 +395,7 @@ With a $500/month budget (~$0.05 per email), Groq's pricing is feasible (~$0.001
 - Monitor and alert on cost anomalies
 
 **Implementation Diagram**:
+
 ```
 Email Ingestion → Redis Queue → Worker Pool (10-20) → Groq API → Post-Processing → PostgreSQL
                                       ↓
@@ -340,6 +413,7 @@ Email Ingestion → Redis Queue → Worker Pool (10-20) → Groq API → Post-Pr
 I would implement automated accuracy monitoring by sampling 100-200 emails daily and comparing extractions against human-verified ground truth. The system would track per-field accuracy (product_line, ports, incoterm, etc.) and overall accuracy. Grafana dashboards would visualize trends, and PagerDuty alerts would trigger if accuracy drops below 85%.
 
 Key metrics to monitor:
+
 - Accuracy per field (9 fields)
 - Error rate by email type (export vs import, DG vs non-DG)
 - API latency and error rates
@@ -348,6 +422,7 @@ Key metrics to monitor:
 **Investigation Process**:
 
 When accuracy drops, I would follow this process:
+
 1. **Identify affected fields**: Which fields dropped? Ports? Incoterms? Product line?
 2. **Analyze error patterns**: Group errors by characteristics (origin country, email format, sender)
 3. **Check for root causes**:
@@ -362,6 +437,7 @@ When accuracy drops, I would follow this process:
    - Re-test on recent emails and iterate
 
 **Prevention**:
+
 - Version control all prompts with git
 - Automated regression tests on key emails before deployment
 - A/B testing for prompt changes
@@ -394,12 +470,14 @@ port_aliases = {
 **Evaluation**:
 
 Accuracy evaluation becomes more complex with multilingual data:
+
 - Separate accuracy metrics per language
 - Need native speakers to create ground truth for Mandarin/Hindi emails
 - Test extraction quality on translated vs original emails
 - Monitor if certain languages have consistently lower accuracy
 
 **Challenges**:
+
 - Transliteration varies (上海 vs Shanghai vs SHA)
 - Mixed-language emails (English subject, Chinese body)
 - Character encoding issues
@@ -425,17 +503,17 @@ python evaluate.py     # Shows accuracy metrics
 
 ### Recommended Test Emails
 
-| Email ID | Why Test This |
-|----------|---------------|
+| Email ID  | Why Test This                            |
+| --------- | ---------------------------------------- |
 | EMAIL_007 | Multiple shipments (semicolon-separated) |
-| EMAIL_005 | Port abbreviation (SIN) |
-| EMAIL_003 | FCA incoterm |
-| EMAIL_019 | Transshipment port (via Chennai) |
-| EMAIL_024 | RT units |
-| EMAIL_006 | DG with UN number |
-| EMAIL_040 | Non-hazardous negation |
-| EMAIL_001 | Export shipment (origin is India) |
-| EMAIL_023 | Export with transshipment |
+| EMAIL_005 | Port abbreviation (SIN)                  |
+| EMAIL_003 | FCA incoterm                             |
+| EMAIL_019 | Transshipment port (via Chennai)         |
+| EMAIL_024 | RT units                                 |
+| EMAIL_006 | DG with UN number                        |
+| EMAIL_040 | Non-hazardous negation                   |
+| EMAIL_001 | Export shipment (origin is India)        |
+| EMAIL_023 | Export with transshipment                |
 
 ### Iteration Process
 
@@ -451,18 +529,21 @@ python evaluate.py     # Shows accuracy metrics
 ## Technical Decisions
 
 ### Why LLM over Regex?
+
 - Emails have too many format variations for regex
 - LLM understands context ("via Chennai" is not destination)
 - Abbreviation handling works naturally
 - Faster iteration (change prompt vs rewrite regex)
 
 ### Why Post-Processing?
+
 - Product line is deterministic (check if port starts with "IN")
 - Canonical port names from reference file
 - Numeric rounding to 2 decimals
 - Fallback for RT units
 
 ### Why Temperature=0?
+
 - Required for reproducible results
 - Same input → same output (debugging)
 - Consistent evaluation metrics

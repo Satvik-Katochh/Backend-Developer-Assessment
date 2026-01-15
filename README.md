@@ -480,6 +480,7 @@ python evaluate.py     # Shows accuracy metrics
 ├── extract.py                  # Main extraction script (with post-processing)
 ├── evaluate.py                 # Accuracy calculator
 ├── output.json                 # Generated results (50 emails)
+├── my_output.json              # Best output produced by extract.py (95.8% accuracy)
 ├── emails_input.json           # Input emails (provided)
 ├── ground_truth.json           # Expected outputs (provided)
 ├── port_codes_reference.json   # Port code mappings (provided)

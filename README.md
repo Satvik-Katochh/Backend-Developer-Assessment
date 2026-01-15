@@ -500,5 +500,4 @@ python evaluate.py     # Shows accuracy metrics
 
 - All prompts evolved based on actual testing, not speculation
 - Each change was driven by specific email failures
-- Prioritized README rules over ground truth when in conflict
-- Code is simple and maintainable (removed ~200 lines of over-engineering)
+- Prioritized ground truth over README on conflict (e.g., consolidated inquiries like EMAIL_007 where ground truth expects combined destination names and weight from any route, not just first shipment)
